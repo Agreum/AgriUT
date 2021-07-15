@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.5;
-import "./PayableToken.sol";
+import "./OwnableToken.sol";
 import "./ERC20Interface.sol";
 
-contract AgriUTToken is PayableToken, ERC20Interface 
+contract AgriUTToken is OwnableToken, ERC20Interface 
 {
     string private _name;
     string private _symbol;
@@ -13,7 +13,7 @@ contract AgriUTToken is PayableToken, ERC20Interface
     mapping(address => mapping(address => uint256)) private _allowances;
     mapping(address => uint256) private _balances;
     mapping(address => bool) private _frozenAccounts;
-    mapping(address => bool) private _managedWallets;
+    mapping(address => bool) private _managedAccounts;
 
     event FrozenFunds(address indexed target, bool frozen);
     event Burn(address indexed from, uint256 value);
@@ -58,6 +58,18 @@ contract AgriUTToken is PayableToken, ERC20Interface
         return _balances[account];
     }
   
+    /* returns frozen state of given account */
+    function frozenAccount(address _account) public view returns (bool frozen)
+    {
+        return _frozenAccounts[_account];
+    }
+
+    /* returns flag if given account is managed */
+    function managedAccount(address _account) public view returns (bool managed)
+    {
+        return _managedAccounts[_account];
+    }
+
     /* Internal transfer, only can be called by this contract */
     function _transfer(address _from, address _to, uint256 _value) internal 
     {
@@ -66,6 +78,7 @@ contract AgriUTToken is PayableToken, ERC20Interface
         require (_balances[_to] + _value >= _balances[_to]);    // Check for overflows
         require(!_frozenAccounts[_from]);                     // Check if sender is frozen
         require(!_frozenAccounts[_to]);                       // Check if recipient is frozen
+        require (_balances[_to] + _value <= _totalSupply);  //Ensure allocate more than total supply to 1 account
         _balances[_from] -= _value;                           // Subtract from the sender
         _balances[_to] += _value;                             // Add the same to the recipient
         emit Transfer(_from, _to, _value);
@@ -92,14 +105,12 @@ contract AgriUTToken is PayableToken, ERC20Interface
      */
     function transferFrom( address sender, address recipient, uint256 amount) public virtual override returns (bool) 
     {
-        _transfer(sender, recipient, amount);
-
         uint256 currentAllowance = _allowances[sender][msg.sender];
         require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
         unchecked {
             _approve(sender, msg.sender, currentAllowance - amount);
         }
-        
+        _transfer(sender, recipient, amount);
         return true;
     }
 
@@ -112,7 +123,7 @@ contract AgriUTToken is PayableToken, ERC20Interface
      */
     function transferFromGivenApproval( address sender, address recipient, uint256 amount) public onlyOwner returns (bool) 
     {
-        require(_managedWallets[sender], "Not a Managed wallet");
+        require(_managedAccounts[sender], "Not a Managed wallet");
         _transfer(sender, recipient, amount);
         return true;
     }
@@ -122,7 +133,8 @@ contract AgriUTToken is PayableToken, ERC20Interface
     * @param spender account to grant permission
     * @param amount which spender can access
     */
-    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+    function approve(address spender, uint256 amount) public virtual override returns (bool) 
+    {
         _approve(msg.sender, spender, amount);
         return true;
     }
@@ -133,7 +145,7 @@ contract AgriUTToken is PayableToken, ERC20Interface
     */
     function approveOwnerToManage(bool allowed) public returns (bool)
     {
-        _managedWallets[msg.sender] = allowed;
+        _managedAccounts[msg.sender] = allowed;
         emit ManagedAccount(msg.sender, allowed);
         return true;
     }
@@ -159,7 +171,9 @@ contract AgriUTToken is PayableToken, ERC20Interface
     /// @notice Prevent / allow target from sending and receiving tokens
     /// @param target Address to be frozen
     /// @param freeze either to freeze it or not
-    function freezeAccount(address target, bool freeze) onlyOwner public {
+    function freezeAccount(address target, bool freeze) onlyOwner public 
+    {
+        require(target != owner(), "Cannot freeze the owner account");
         _frozenAccounts[target] = freeze;
         emit FrozenFunds(target, freeze);
     }
@@ -183,7 +197,7 @@ contract AgriUTToken is PayableToken, ERC20Interface
     */
     function burnWithApproval(address _from, uint256 _value) public onlyOwner returns (bool success) 
     {
-        require(_managedWallets[_from], "Not a Managed wallet");
+        require(_managedAccounts[_from], "Not a Managed wallet");
         _burn(_from, _value);
         return true;
     }
@@ -194,13 +208,12 @@ contract AgriUTToken is PayableToken, ERC20Interface
      * @param _from the address of the sender
      * @param _value the amount of money to burn
      */
-    function burnFrom(address _from, uint256 _value) public returns (bool success) {
-        require(_balances[_from] >= _value);                  // Check if the targeted balance is enough
-        require(_value <= _allowances[_from][msg.sender]);    // Check allowance
-        _balances[_from] -= _value;                           // Subtract from the targeted balance
-        _allowances[_from][msg.sender] -= _value;             // Subtract from the sender's allowance
-        _totalSupply -= _value;                              // Update totalSupply
-        emit Burn(_from, _value);
+    function burnFrom(address _from, uint256 _value) public returns (bool success) 
+    {
+        uint256 currentAllowance = allowance(_from, msg.sender);
+        require(currentAllowance >= _value, "ERC20: burn amount exceeds allowance");
+        _allowances[_from][msg.sender] -= _value;
+        _burn(_from, _value);
         return true;
     }
 
@@ -208,7 +221,8 @@ contract AgriUTToken is PayableToken, ERC20Interface
     {
         require(_address != address(0), "ERC20: burn from the zero address");
         require(_balances[_address] >= _value, "ERC20: burn amount exceeds balance");                // Check if the targeted balance is enough
-        _balances[_address] = _balances[_address] - _value;                           // Subtract from the targeted balance
+        require(!_frozenAccounts[_address]);
+        _balances[_address] -= _value;                           // Subtract from the targeted balance
         _totalSupply -= _value;                              // Update totalSupply
         emit Burn(_address, _value);
     }
